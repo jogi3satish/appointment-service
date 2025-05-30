@@ -1,0 +1,158 @@
+# AWS Lambda Container Deployement track 
+
+ Provider aws
+ Region US-east1
+resource "aws_vpc" "main" {
+ cidr_block = "10.0.0.0/16"
+ 
+ tags = {
+   Name = "Project VPC"
+ }
+}
+variable "public_subnet_cidrs" {
+ type        = list(string)
+ description = "Public Subnet CIDR values"
+ default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+ 
+variable "private_subnet_cidrs" {
+ type        = list(string)
+ description = "Private Subnet CIDR values"
+ default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+}
+
+# Docker File
+# if it is a nodejs Application
+
+# Use an official AWS Lambda base image for Node.js
+FROM public.ecr.aws/lambda/nodejs:20
+
+# Set the working directory in the container
+WORKDIR /var/task
+
+# Copy package.json and package-lock.json to install dependencies
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy the rest of the application code
+COPY . .
+
+# Set the CMD to execute the handler
+CMD ["index.handler"]
+ 
+# For pushing the Docker image into ECR 
+
+aws ecr get-login-password --region us-east1 | docker login --username AWS --password-stdin aws_account_id.dkr.ecr.region.amazonaws.com
+
+Lambda function for containerisation 
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::ACCOUNT:role/ROLE
+          aws-region: REGION
+
+      # Build a container image
+      - uses: aws-actions/amazon-ecr-login@v1
+        id: ecr
+      - uses: docker/metadata-action@v4
+        id: metadata
+        with:
+          images: ${{ steps.ecr.outputs.registry }}/${{ github.repository }}
+          flavor: latest=false
+      - uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+
+      # Deploy a function
+      - uses: int128/deploy-lambda-action@v1
+        with:
+          function-name: my-function
+          image-uri: ${{ steps.metadata.outputs.tags }}
+          alias-name: ${{ steps.metadata.outputs.version }}
+
+# configuration of Lambda function 
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CrossAccountPermission",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownImage"
+      ],
+      "Principal": {
+        "AWS": "arn:aws:iam::123456789012:root"
+      }
+    },
+    {
+      "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownImage"
+      ],
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Condition": {
+        "StringLike": {
+          "aws:sourceARN": "arn:aws:lambda:us-east-1:123456789012:function:*"
+        }
+      }
+    }
+  ]
+}
+
+
+.github/workflows/terraform-plan.yml.
+
+name: 'Terraform Plan'
+## ...
+on:
+  pull_request:
+
+env:
+  TF_CLOUD_ORGANIZATION: "aws"
+  TF_API_TOKEN: "${{ secrets.TF_API_TOKEN }}"
+  TF_WORKSPACE: "creating-terraform-github-actions"
+  CONFIG_DIRECTORY: "./"
+
+## ...
+jobs:
+  terraform:
+    if: github.repository != 'SubbuHCL/appointment-service-terraform-github-actions'
+    name: "Terraform Plan"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+
+## ...
+- name: Checkout
+  uses: actions/checkout@v3
+## ...
+
+## ...
+- name: Upload Configuration
+  uses: Upload github/actions/upload-configuration@v1.0.0
+  id: plan-upload
+  with:
+    workspace: ${{ env.TF_WORKSPACE }}
+    directory: ${{ env.CONFIG_DIRECTORY }}
+    speculative: true
+## ...
+
